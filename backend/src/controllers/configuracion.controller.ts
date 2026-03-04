@@ -137,33 +137,77 @@ export const testSmtpConfig = async (req: AuthRequest, res: Response): Promise<v
       return;
     }
 
-    // Obtener config de BD
+    // Obtener config de BD (activo o no — para pruebas se permite aunque esté inactivo)
     await ensureTable();
     const rows = await query(
-      'SELECT * FROM configuracion_smtp WHERE clinica_id = ? AND activo = 1',
+      'SELECT * FROM configuracion_smtp WHERE clinica_id = ?',
       [clinicaId]
     ) as any[];
 
-    const cfg = rows[0];
-    if (!cfg || !cfg.smtp_user || !cfg.smtp_password) {
-      res.status(400).json({ success: false, error: 'Configure y active el SMTP antes de enviar prueba' });
+    // Determinar credenciales: DB primero, luego variables de entorno
+    let smtpHost: string;
+    let smtpPort: number;
+    let smtpUser: string;
+    let smtpPassword: string;
+    let smtpFrom: string;
+    let smtpSecure: boolean;
+
+    const dbCfg = rows[0];
+    if (dbCfg && dbCfg.smtp_user && dbCfg.smtp_password) {
+      smtpHost     = dbCfg.smtp_host     || 'smtp.gmail.com';
+      smtpPort     = dbCfg.smtp_port     || 587;
+      smtpUser     = dbCfg.smtp_user;
+      smtpPassword = dbCfg.smtp_password;
+      smtpFrom     = dbCfg.smtp_from     || dbCfg.smtp_user;
+      smtpSecure   = !!dbCfg.smtp_secure;
+    } else if (process.env.SMTP_USER && process.env.SMTP_PASSWORD) {
+      // Fallback a variables de entorno
+      smtpHost     = process.env.SMTP_HOST     || 'smtp.gmail.com';
+      smtpPort     = parseInt(process.env.SMTP_PORT || '587');
+      smtpUser     = process.env.SMTP_USER;
+      smtpPassword = process.env.SMTP_PASSWORD;
+      smtpFrom     = process.env.SMTP_FROM     || process.env.SMTP_USER;
+      smtpSecure   = process.env.SMTP_SECURE === 'true';
+    } else {
+      res.status(400).json({
+        success: false,
+        error: 'No hay configuración SMTP disponible. Configure el SMTP en esta página o establezca las variables de entorno SMTP_USER y SMTP_PASSWORD.'
+      });
       return;
     }
 
-    // Importar nodemailer dinámicamente para no fallar si no está instalado
     const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransport({
-      host: cfg.smtp_host,
-      port: cfg.smtp_port,
-      secure: !!cfg.smtp_secure,
-      auth: { user: cfg.smtp_user, pass: cfg.smtp_password },
+    const transporter = nodemailer.createTransporter({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure, // true para 465, false para 587
+      requireTLS: !smtpSecure && smtpPort === 587,
+      auth: {
+        user: smtpUser,
+        pass: smtpPassword.replace(/\s/g, ''), // Eliminar espacios de app passwords de Gmail
+      },
+      tls: {
+        rejectUnauthorized: false, // Evitar errores de certificado en Railway
+      },
     });
+
+    // Verificar conexión antes de enviar
+    try {
+      await transporter.verify();
+    } catch (verifyError: any) {
+      res.status(500).json({
+        success: false,
+        error: `No se pudo conectar al servidor SMTP: ${verifyError.message}. Verifique host, puerto y credenciales.`,
+        detail: verifyError.code || ''
+      });
+      return;
+    }
 
     const clinicas = await query('SELECT nombre FROM clinicas WHERE id = ?', [clinicaId]) as any[];
     const clinicaNombre = clinicas[0]?.nombre || 'Clínica';
 
     await transporter.sendMail({
-      from: cfg.smtp_from || cfg.smtp_user,
+      from: smtpFrom,
       to: email_destino,
       subject: `✅ Prueba de email – ${clinicaNombre}`,
       html: `
@@ -178,7 +222,11 @@ export const testSmtpConfig = async (req: AuthRequest, res: Response): Promise<v
 
     res.json({ success: true, message: `Email de prueba enviado a ${email_destino}` });
   } catch (error: any) {
-    res.status(500).json({ success: false, error: 'Error al enviar email de prueba: ' + error.message });
+    res.status(500).json({
+      success: false,
+      error: 'Error al enviar email de prueba: ' + error.message,
+      detail: error.code || ''
+    });
   }
 };
 
