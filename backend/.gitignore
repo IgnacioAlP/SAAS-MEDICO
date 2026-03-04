@@ -1,0 +1,14 @@
+node_modules/
+dist/
+uploads/
+*.log
+.env
+.DS_Store
+*.sqlite
+*.db
+coverage/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
