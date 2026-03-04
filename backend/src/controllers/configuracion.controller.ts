@@ -177,18 +177,31 @@ export const testSmtpConfig = async (req: AuthRequest, res: Response): Promise<v
     }
 
     const nodemailer = require('nodemailer');
+    const dns = require('dns');
+    const { promisify } = require('util');
+    const resolve4 = promisify(dns.resolve4);
+
+    // Resolver hostname a IPv4 explícitamente (Railway no soporta IPv6 saliente)
+    let resolvedHost = smtpHost;
+    try {
+      const addresses = await resolve4(smtpHost);
+      if (addresses && addresses.length > 0) resolvedHost = addresses[0];
+    } catch (_) {
+      // Si falla la resolución, usar el host original
+    }
+
     const transporter = nodemailer.createTransport({
-      host: smtpHost,
+      host: resolvedHost,
       port: smtpPort,
-      secure: smtpSecure, // true para 465, false para 587
+      secure: smtpSecure,
       requireTLS: !smtpSecure && smtpPort === 587,
-      family: 4, // Forzar IPv4 (Railway no soporta IPv6 a Gmail)
       auth: {
         user: smtpUser,
-        pass: smtpPassword.replace(/\s/g, ''), // Eliminar espacios de app passwords de Gmail
+        pass: smtpPassword.replace(/\s/g, ''),
       },
       tls: {
-        rejectUnauthorized: false, // Evitar errores de certificado en Railway
+        rejectUnauthorized: false,
+        servername: smtpHost, // SNI con el hostname original
       },
     });
 
