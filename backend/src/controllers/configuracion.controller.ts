@@ -137,110 +137,95 @@ export const testSmtpConfig = async (req: AuthRequest, res: Response): Promise<v
       return;
     }
 
-    // Obtener config de BD (activo o no — para pruebas se permite aunque esté inactivo)
-    await ensureTable();
-    const rows = await query(
-      'SELECT * FROM configuracion_smtp WHERE clinica_id = ?',
-      [clinicaId]
-    ) as any[];
+    const clinicas = await query('SELECT nombre FROM clinicas WHERE id = ?', [clinicaId]) as any[];
+    const clinicaNombre = clinicas[0]?.nombre || 'Clínica';
 
-    // Determinar credenciales: DB primero, luego variables de entorno
-    let smtpHost: string;
-    let smtpPort: number;
-    let smtpUser: string;
-    let smtpPassword: string;
-    let smtpFrom: string;
-    let smtpSecure: boolean;
+    const htmlBody = `
+      <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:32px;background:#f0f9ff;border-radius:12px;">
+        <h2 style="color:#0e7490;">✅ Configuración de email correcta</h2>
+        <p>Este es un correo de prueba enviado desde <strong>${clinicaNombre}</strong>.</p>
+        <p>El sistema de notificaciones por email funciona correctamente.</p>
+        <hr style="border:none;border-top:1px solid #bae6fd;margin:24px 0;"/>
+        <p style="font-size:12px;color:#6b7280;">Sistema SaaS Médico NexusCreative</p>
+      </div>`;
+
+    // ── Opción A: Resend (recomendado en Railway — usa HTTPS, no SMTP) ──
+    if (process.env.RESEND_API_KEY) {
+      const { Resend } = require('resend');
+      const resend = new Resend(process.env.RESEND_API_KEY);
+
+      const fromAddress = process.env.SMTP_FROM || 'onboarding@resend.dev';
+
+      const { error: resendError } = await resend.emails.send({
+        from: fromAddress,
+        to: email_destino,
+        subject: `✅ Prueba de email – ${clinicaNombre}`,
+        html: htmlBody,
+      });
+
+      if (resendError) {
+        res.status(500).json({ success: false, error: 'Error Resend: ' + resendError.message });
+        return;
+      }
+
+      res.json({ success: true, message: `Email de prueba enviado a ${email_destino} (vía Resend)` });
+      return;
+    }
+
+    // ── Opción B: SMTP clásico (fallback) ──
+    await ensureTable();
+    const rows = await query('SELECT * FROM configuracion_smtp WHERE clinica_id = ?', [clinicaId]) as any[];
+
+    let smtpHost: string, smtpPort: number, smtpUser: string, smtpPassword: string, smtpFrom: string, smtpSecure: boolean;
 
     const dbCfg = rows[0];
     if (dbCfg && dbCfg.smtp_user && dbCfg.smtp_password) {
-      smtpHost     = dbCfg.smtp_host     || 'smtp.gmail.com';
-      smtpPort     = dbCfg.smtp_port     || 587;
-      smtpUser     = dbCfg.smtp_user;
+      smtpHost = dbCfg.smtp_host || 'smtp.gmail.com';
+      smtpPort = dbCfg.smtp_port || 465;
+      smtpUser = dbCfg.smtp_user;
       smtpPassword = dbCfg.smtp_password;
-      smtpFrom     = dbCfg.smtp_from     || dbCfg.smtp_user;
-      smtpSecure   = !!dbCfg.smtp_secure;
+      smtpFrom = dbCfg.smtp_from || dbCfg.smtp_user;
+      smtpSecure = !!dbCfg.smtp_secure;
     } else if (process.env.SMTP_USER && process.env.SMTP_PASSWORD) {
-      // Fallback a variables de entorno
-      smtpHost     = process.env.SMTP_HOST     || 'smtp.gmail.com';
-      smtpPort     = parseInt(process.env.SMTP_PORT || '587');
-      smtpUser     = process.env.SMTP_USER;
+      smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
+      smtpPort = parseInt(process.env.SMTP_PORT || '465');
+      smtpUser = process.env.SMTP_USER;
       smtpPassword = process.env.SMTP_PASSWORD;
-      smtpFrom     = process.env.SMTP_FROM     || process.env.SMTP_USER;
-      smtpSecure   = process.env.SMTP_SECURE === 'true';
+      smtpFrom = process.env.SMTP_FROM || process.env.SMTP_USER;
+      smtpSecure = process.env.SMTP_SECURE === 'true';
     } else {
       res.status(400).json({
         success: false,
-        error: 'No hay configuración SMTP disponible. Configure el SMTP en esta página o establezca las variables de entorno SMTP_USER y SMTP_PASSWORD.'
+        error: 'Configure RESEND_API_KEY en las variables de entorno de Railway para enviar emails. Railway bloquea el acceso SMTP directo.'
       });
       return;
     }
 
     const nodemailer = require('nodemailer');
-    const dns = require('dns');
-    const { promisify } = require('util');
-    const resolve4 = promisify(dns.resolve4);
-
-    // Resolver hostname a IPv4 explícitamente (Railway no soporta IPv6 saliente)
-    let resolvedHost = smtpHost;
-    try {
-      const addresses = await resolve4(smtpHost);
-      if (addresses && addresses.length > 0) resolvedHost = addresses[0];
-    } catch (_) {
-      // Si falla la resolución, usar el host original
-    }
-
     const transporter = nodemailer.createTransport({
-      host: resolvedHost,
+      host: smtpHost,
       port: smtpPort,
       secure: smtpSecure,
-      requireTLS: !smtpSecure && smtpPort === 587,
-      auth: {
-        user: smtpUser,
-        pass: smtpPassword.replace(/\s/g, ''),
-      },
-      tls: {
-        rejectUnauthorized: false,
-        servername: smtpHost, // SNI con el hostname original
-      },
+      auth: { user: smtpUser, pass: smtpPassword.replace(/\s/g, '') },
+      tls: { rejectUnauthorized: false },
     });
 
-    // Verificar conexión antes de enviar
     try {
       await transporter.verify();
     } catch (verifyError: any) {
       res.status(500).json({
         success: false,
-        error: `No se pudo conectar al servidor SMTP: ${verifyError.message}. Verifique host, puerto y credenciales.`,
+        error: `No se pudo conectar al servidor SMTP: ${verifyError.message}`,
         detail: verifyError.code || ''
       });
       return;
     }
 
-    const clinicas = await query('SELECT nombre FROM clinicas WHERE id = ?', [clinicaId]) as any[];
-    const clinicaNombre = clinicas[0]?.nombre || 'Clínica';
-
-    await transporter.sendMail({
-      from: smtpFrom,
-      to: email_destino,
-      subject: `✅ Prueba de email – ${clinicaNombre}`,
-      html: `
-        <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:32px;background:#f0f9ff;border-radius:12px;">
-          <h2 style="color:#0e7490;">✅ Configuración de email correcta</h2>
-          <p>Este es un correo de prueba enviado desde <strong>${clinicaNombre}</strong>.</p>
-          <p>La configuración SMTP funciona correctamente.</p>
-          <hr style="border:none;border-top:1px solid #bae6fd;margin:24px 0;"/>
-          <p style="font-size:12px;color:#6b7280;">Sistema SaaS Médico NexusCreative</p>
-        </div>`
-    });
-
+    await transporter.sendMail({ from: smtpFrom, to: email_destino, subject: `✅ Prueba de email – ${clinicaNombre}`, html: htmlBody });
     res.json({ success: true, message: `Email de prueba enviado a ${email_destino}` });
+
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      error: 'Error al enviar email de prueba: ' + error.message,
-      detail: error.code || ''
-    });
+    res.status(500).json({ success: false, error: 'Error al enviar email de prueba: ' + error.message, detail: error.code || '' });
   }
 };
 
