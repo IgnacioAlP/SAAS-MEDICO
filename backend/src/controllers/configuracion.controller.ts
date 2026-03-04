@@ -182,6 +182,7 @@ export const testSmtpConfig = async (req: AuthRequest, res: Response): Promise<v
       port: smtpPort,
       secure: smtpSecure, // true para 465, false para 587
       requireTLS: !smtpSecure && smtpPort === 587,
+      family: 4, // Forzar IPv4 (Railway no soporta IPv6 a Gmail)
       auth: {
         user: smtpUser,
         pass: smtpPassword.replace(/\s/g, ''), // Eliminar espacios de app passwords de Gmail
