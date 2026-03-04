@@ -177,7 +177,7 @@ export const testSmtpConfig = async (req: AuthRequest, res: Response): Promise<v
     }
 
     const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransporter({
+    const transporter = nodemailer.createTransport({
       host: smtpHost,
       port: smtpPort,
       secure: smtpSecure, // true para 465, false para 587
