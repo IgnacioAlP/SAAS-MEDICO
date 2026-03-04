@@ -20,8 +20,25 @@ const PORT = process.env.PORT || 5000;
 app.use(helmet());
 
 // CORS
+const allowedOrigins = [
+  'http://localhost:3000',
+  process.env.CORS_ORIGIN,
+  process.env.FRONTEND_URL,
+].filter(Boolean) as string[];
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    // Permitir requests sin origin (mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+    // Permitir cualquier subdominio de vercel.app y railway.app
+    if (origin.endsWith('.vercel.app') || origin.endsWith('.railway.app')) {
+      return callback(null, true);
+    }
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    callback(new Error(`CORS bloqueado para: ${origin}`));
+  },
   credentials: true,
 }));
 
