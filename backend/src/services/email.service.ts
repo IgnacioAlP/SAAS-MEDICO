@@ -5,60 +5,94 @@ import { query } from '../config/database';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 const BACKEND_URL  = process.env.BACKEND_URL  || 'http://localhost:5000';
 
-// ---------- Transporter ----------
+// ================================================================
+// HELPER: enviar email — soporta Brevo, Resend y SMTP (fallback)
+// ================================================================
+interface SendEmailOptions {
+  to:       string;
+  subject:  string;
+  html:     string;
+  fromName: string;
+  fromEmail:string;
+}
 
-/** Lee la config SMTP de la BD (si clinicaId) o del .env */
-const getSmtpConfig = async (clinicaId?: number) => {
+export const sendEmail = async (opts: SendEmailOptions): Promise<void> => {
+  const { to, subject, html, fromName, fromEmail } = opts;
+
+  // ── 1. Brevo (recomendado en Railway — HTTPS, sin restricción de destinatario) ──
+  if (process.env.BREVO_API_KEY) {
+    const SibApiV3Sdk = require('@getbrevo/brevo');
+    const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
+    apiInstance.setApiKey(
+      SibApiV3Sdk.TransactionalEmailsApiApiKeys.apiKey,
+      process.env.BREVO_API_KEY
+    );
+    await apiInstance.sendTransacEmail({
+      sender:      { email: fromEmail, name: fromName },
+      to:          [{ email: to }],
+      subject,
+      htmlContent: html,
+    });
+    console.log(`✉️  [Brevo] Email enviado a ${to}`);
+    return;
+  }
+
+  // ── 2. Resend (requiere dominio verificado para enviar a terceros) ──
+  if (process.env.RESEND_API_KEY) {
+    const { Resend } = require('resend');
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const { error } = await resend.emails.send({
+      from:    `${fromName} <${fromEmail}>`,
+      to,
+      subject,
+      html,
+    });
+    if (error) throw new Error('Resend error: ' + error.message);
+    console.log(`✉️  [Resend] Email enviado a ${to}`);
+    return;
+  }
+
+  // ── 3. SMTP clásico (fallback — NO funciona en Railway) ──
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASSWORD;
+  if (!smtpHost || !smtpUser || !smtpPass) {
+    console.warn('⚠️  Sin proveedor de email configurado — email omitido');
+    return;
+  }
+  const transporter = nodemailer.createTransport({
+    host:   smtpHost,
+    port:   parseInt(process.env.SMTP_PORT || '465'),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth:   { user: smtpUser, pass: smtpPass.replace(/\s/g, '') },
+    tls:    { rejectUnauthorized: false },
+  });
+  await transporter.sendMail({
+    from: `"${fromName}" <${fromEmail}>`,
+    to,
+    subject,
+    html,
+  });
+  console.log(`✉️  [SMTP] Email enviado a ${to}`);
+};
+
+/** Obtiene el email "from" configurado para una clínica */
+const getFromAddress = async (clinicaId?: number): Promise<{ fromEmail: string; fromName: string }> => {
+  const defaultFrom = process.env.SMTP_FROM || process.env.SMTP_USER || 'onboarding@resend.dev';
+
   if (clinicaId) {
     try {
       const rows = await query(
-        'SELECT * FROM configuracion_smtp WHERE clinica_id = ? AND activo = 1',
+        'SELECT smtp_from, smtp_user FROM configuracion_smtp WHERE clinica_id = ? AND activo = 1',
         [clinicaId]
       ) as any[];
-      if (rows.length && rows[0].smtp_user && rows[0].smtp_password) {
-        return {
-          host:   rows[0].smtp_host,
-          port:   rows[0].smtp_port,
-          secure: !!rows[0].smtp_secure,
-          user:   rows[0].smtp_user,
-          pass:   rows[0].smtp_password,
-          from:   rows[0].smtp_from || rows[0].smtp_user,
-        };
+      if (rows.length && rows[0].smtp_from) {
+        return { fromEmail: rows[0].smtp_from, fromName: 'Clínica' };
       }
-    } catch {
-      // tabla aún no existe, cae al fallback
-    }
+    } catch { /* tabla no existe aún */ }
   }
 
-  // Fallback: .env
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASSWORD;
-  if (!host || !user || !pass) return null;
-
-  return {
-    host,
-    port:   parseInt(process.env.SMTP_PORT || '587'),
-    secure: process.env.SMTP_PORT === '465',
-    user,
-    pass,
-    from:   process.env.SMTP_FROM || user,
-  };
-};
-
-const createTransporter = async (clinicaId?: number) => {
-  const cfg = await getSmtpConfig(clinicaId);
-  if (!cfg) {
-    console.warn('⚠️  SMTP no configurado — emails deshabilitados');
-    return null;
-  }
-  return {
-    transporter: nodemailer.createTransport({
-      host: cfg.host, port: cfg.port, secure: cfg.secure,
-      auth: { user: cfg.user, pass: cfg.pass },
-    }),
-    from: cfg.from,
-  };
+  return { fromEmail: defaultFrom, fromName: 'NexusCreative Medical' };
 };
 
 // ---------- Helper base HTML ----------
@@ -123,8 +157,7 @@ export interface CitaEmailData {
 }
 
 export const sendEmailNuevaCita = async (data: CitaEmailData): Promise<void> => {
-  const t = await createTransporter(data.clinicaId);
-  if (!t) return;
+  const { fromEmail, fromName } = await getFromAddress(data.clinicaId);
 
   // Token de confirmación firmado con JWT (expira en 7 días)
   const token = jwt.sign(
@@ -166,22 +199,20 @@ export const sendEmailNuevaCita = async (data: CitaEmailData): Promise<void> => 
       Si no esperaba este correo, puede ignorarlo. Para cancelar su cita, comuníquese directamente con la clínica.
     </p>`;
 
-  await t.transporter.sendMail({
-    from: `"${data.clinicaNombre}" <${t.from}>`,
-    to: data.pacienteEmail,
-    subject: `📅 Cita agendada – ${fechaFormateada} ${horaFormateada} | ${data.clinicaNombre}`,
-    html: baseTemplate('Nueva Cita Médica', cuerpo, data.clinicaNombre),
+  await sendEmail({
+    to:        data.pacienteEmail,
+    fromName:  data.clinicaNombre,
+    fromEmail,
+    subject:   `📅 Cita agendada – ${fechaFormateada} ${horaFormateada} | ${data.clinicaNombre}`,
+    html:      baseTemplate('Nueva Cita Médica', cuerpo, data.clinicaNombre),
   });
-
-  console.log(`✉️ Email de cita enviado a ${data.pacienteEmail}`);
 };
 
 // ================================================================
 // 2. EMAIL: CITA CONFIRMADA (respuesta tras hacer clic en botón)
 // ================================================================
 export const sendEmailCitaConfirmada = async (data: CitaEmailData): Promise<void> => {
-  const t = await createTransporter(data.clinicaId);
-  if (!t) return;
+  const { fromEmail, fromName } = await getFromAddress(data.clinicaId);
 
   const fechaObj = new Date(data.fecha);
   const fechaFormateada = fechaObj.toLocaleDateString('es-PE', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
@@ -198,11 +229,12 @@ export const sendEmailCitaConfirmada = async (data: CitaEmailData): Promise<void
     </div>
     <p style="font-size:13px;color:#6b7280;">Recuerde llegar 10 minutos antes de su hora programada con su documento de identidad.</p>`;
 
-  await t.transporter.sendMail({
-    from: `"${data.clinicaNombre}" <${t.from}>`,
-    to: data.pacienteEmail,
-    subject: `✅ Cita confirmada – ${fechaFormateada} | ${data.clinicaNombre}`,
-    html: baseTemplate('Cita Confirmada', cuerpo, data.clinicaNombre),
+  await sendEmail({
+    to:        data.pacienteEmail,
+    fromName:  data.clinicaNombre,
+    fromEmail,
+    subject:   `✅ Cita confirmada – ${fechaFormateada} | ${data.clinicaNombre}`,
+    html:      baseTemplate('Cita Confirmada', cuerpo, data.clinicaNombre),
   });
 };
 
@@ -232,8 +264,7 @@ export interface ConsultaEmailData {
 }
 
 export const sendEmailConsulta = async (data: ConsultaEmailData): Promise<void> => {
-  const t = await createTransporter(data.clinicaId);
-  if (!t) return;
+  const { fromEmail, fromName } = await getFromAddress(data.clinicaId);
 
   const fechaFormateada = new Date(data.fecha).toLocaleDateString('es-PE', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
@@ -280,14 +311,13 @@ export const sendEmailConsulta = async (data: ConsultaEmailData): Promise<void> 
       Consulta #${data.consultaId} registrada el ${fechaFormateada}. Guarde este correo para referencia futura.
     </p>`;
 
-  await t.transporter.sendMail({
-    from: `"${data.clinicaNombre}" <${t.from}>`,
-    to: data.pacienteEmail,
-    subject: `🏥 Resumen de consulta – ${fechaFormateada} | ${data.clinicaNombre}`,
-    html: baseTemplate('Resumen de Consulta', cuerpo, data.clinicaNombre),
+  await sendEmail({
+    to:        data.pacienteEmail,
+    fromName:  data.clinicaNombre,
+    fromEmail,
+    subject:   `🏥 Resumen de consulta – ${fechaFormateada} | ${data.clinicaNombre}`,
+    html:      baseTemplate('Resumen de Consulta', cuerpo, data.clinicaNombre),
   });
-
-  console.log(`✉️ Email de consulta enviado a ${data.pacienteEmail}`);
 };
 
 // ================================================================
@@ -308,8 +338,7 @@ export interface RecetaEmailData {
 }
 
 export const sendEmailReceta = async (data: RecetaEmailData): Promise<void> => {
-  const t = await createTransporter(data.clinicaId);
-  if (!t) return;
+  const { fromEmail, fromName } = await getFromAddress(data.clinicaId);
 
   const fechaFormateada = new Date(data.fecha).toLocaleDateString('es-PE', {
     year: 'numeric', month: 'long', day: 'numeric'
@@ -338,12 +367,11 @@ export const sendEmailReceta = async (data: RecetaEmailData): Promise<void> => {
       ⚠️ Esta receta tiene validez únicamente en farmacias habilitadas. Receta #${data.recetaId} emitida en ${data.clinicaNombre}.
     </p>`;
 
-  await t.transporter.sendMail({
-    from: `"${data.clinicaNombre}" <${t.from}>`,
-    to: data.pacienteEmail,
-    subject: `💊 Receta médica #${data.recetaId} – ${data.clinicaNombre}`,
-    html: baseTemplate('Receta Médica', cuerpo, data.clinicaNombre),
+  await sendEmail({
+    to:        data.pacienteEmail,
+    fromName:  data.clinicaNombre,
+    fromEmail,
+    subject:   `💊 Receta médica #${data.recetaId} – ${data.clinicaNombre}`,
+    html:      baseTemplate('Receta Médica', cuerpo, data.clinicaNombre),
   });
-
-  console.log(`✉️ Email de receta enviado a ${data.pacienteEmail}`);
 };
