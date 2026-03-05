@@ -225,17 +225,6 @@ export default function LoginPage() {
               </button>
             </div>
 
-            {/* Credenciales de prueba */}
-            <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-              <p className="text-xs font-semibold text-blue-900 mb-2">
-                🔐 Credenciales de prueba:
-              </p>
-              <div className="space-y-1 text-xs text-blue-800">
-                <p><strong>Admin:</strong> admin@nexuscreative.com / 12345678</p>
-                <p><strong>Médico:</strong> doctor@nexuscreative.com / 12345678</p>
-                <p><strong>Recepción:</strong> recepcion@nexuscreative.com / 12345678</p>
-              </div>
-            </div>
           </form>
         </div>
       </div>
