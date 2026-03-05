@@ -21,13 +21,9 @@ export const sendEmail = async (opts: SendEmailOptions): Promise<void> => {
 
   // ── 1. Brevo (recomendado en Railway — HTTPS, sin restricción de destinatario) ──
   if (process.env.BREVO_API_KEY) {
-    const SibApiV3Sdk = require('@getbrevo/brevo');
-    const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
-    apiInstance.setApiKey(
-      SibApiV3Sdk.TransactionalEmailsApiApiKeys.apiKey,
-      process.env.BREVO_API_KEY
-    );
-    await apiInstance.sendTransacEmail({
+    const { BrevoClient } = require('@getbrevo/brevo');
+    const client = new BrevoClient({ apiKey: process.env.BREVO_API_KEY });
+    await client.transactionalEmails.sendTransacEmail({
       sender:      { email: fromEmail, name: fromName },
       to:          [{ email: to }],
       subject,
