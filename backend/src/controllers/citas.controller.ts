@@ -165,7 +165,7 @@ export const createCita = async (req: AuthRequest, res: Response): Promise<void>
       `INSERT INTO citas (
         clinica_id, paciente_id, medico_id, fecha, motivo,
         tipo_cita, duracion_minutos, observaciones, estado
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pendiente')`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'programada')`,
       [
         clinicaId ?? null,
         paciente_id ?? null,

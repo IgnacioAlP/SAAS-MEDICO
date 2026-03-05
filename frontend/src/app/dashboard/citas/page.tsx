@@ -179,11 +179,14 @@ export default function CitasPage() {
 
   const getEstadoColor = (estado: string) => {
     switch (estado) {
-      case 'confirmada': return 'bg-green-100 text-green-800';
-      case 'pendiente': return 'bg-yellow-100 text-yellow-800';
-      case 'cancelada': return 'bg-red-100 text-red-800';
-      case 'completada': return 'bg-blue-100 text-blue-800';
-      default: return 'bg-gray-100 text-gray-800';
+      case 'programada':  return 'bg-yellow-100 text-yellow-800';
+      case 'confirmada':  return 'bg-green-100 text-green-800';
+      case 'en_espera':   return 'bg-blue-100 text-blue-800';
+      case 'atendiendo':  return 'bg-purple-100 text-purple-800';
+      case 'atendida':    return 'bg-teal-100 text-teal-800';
+      case 'cancelada':   return 'bg-red-100 text-red-800';
+      case 'no_asistio':  return 'bg-orange-100 text-orange-800';
+      default:            return 'bg-gray-100 text-gray-800';
     }
   };
 
@@ -261,19 +264,19 @@ export default function CitasPage() {
                       <div className="text-sm text-gray-900">{cita.motivo || '-'}</div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 py-1 text-xs font-medium rounded-full capitalize ${getEstadoColor(cita.estado || 'pendiente')}`}>
-                        {cita.estado || 'pendiente'}
+                      <span className={`px-2 py-1 text-xs font-medium rounded-full capitalize ${getEstadoColor(cita.estado || 'programada')}`}>
+                        {(cita.estado || 'programada').replace('_', ' ')}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-center">
                       {(() => {
-                        const estado = cita.estado || 'pendiente';
-                        if (estado === 'cancelada' || estado === 'completada') {
+                        const estado = cita.estado || 'programada';
+                        if (estado === 'cancelada' || estado === 'atendida' || estado === 'no_asistio') {
                           return <span className="text-gray-400 text-sm">Sin acciones</span>;
                         }
                         return (
                           <>
-                            {estado === 'pendiente' && (
+                            {estado === 'programada' && (
                               <button
                                 onClick={() => handleConfirmar(cita.id)}
                                 className="text-green-600 hover:text-green-900 font-medium text-sm mr-3"
