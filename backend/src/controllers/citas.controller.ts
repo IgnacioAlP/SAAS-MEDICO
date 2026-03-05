@@ -161,22 +161,51 @@ export const createCita = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     console.log('✅ Insertando cita en BD...');
-    const result = await query(
-      `INSERT INTO citas (
-        clinica_id, paciente_id, medico_id, fecha, motivo,
-        tipo_cita, duracion_minutos, observaciones, estado
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'programada')`,
-      [
-        clinicaId ?? null,
-        paciente_id ?? null,
-        medico_id ?? null,
-        fecha ?? null,
-        motivo ?? null,
-        tipo_cita || 'consulta',
-        duracion_minutos || 30,
-        observaciones ?? null
-      ]
-    );
+
+    // Intentar con 'programada', si falla el ENUM usar 'pendiente' como fallback
+    let estadoInicial = 'programada';
+    let result: any;
+    try {
+      result = await query(
+        `INSERT INTO citas (
+          clinica_id, paciente_id, medico_id, fecha, motivo,
+          tipo_cita, duracion_minutos, observaciones, estado
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          clinicaId ?? null,
+          paciente_id ?? null,
+          medico_id ?? null,
+          fecha ?? null,
+          motivo ?? null,
+          tipo_cita || 'consulta',
+          duracion_minutos || 30,
+          observaciones ?? null,
+          estadoInicial
+        ]
+      );
+    } catch (insertError: any) {
+      // Si falla por el ENUM, intentar sin especificar estado (usa el DEFAULT de la tabla)
+      if (insertError.message?.includes('Data truncated') || insertError.message?.includes('estado')) {
+        result = await query(
+          `INSERT INTO citas (
+            clinica_id, paciente_id, medico_id, fecha, motivo,
+            tipo_cita, duracion_minutos, observaciones
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            clinicaId ?? null,
+            paciente_id ?? null,
+            medico_id ?? null,
+            fecha ?? null,
+            motivo ?? null,
+            tipo_cita || 'consulta',
+            duracion_minutos || 30,
+            observaciones ?? null
+          ]
+        );
+      } else {
+        throw insertError;
+      }
+    }
 
     const citaId = (result as any).insertId;
     console.log('✅ Cita creada exitosamente, ID:', citaId);
