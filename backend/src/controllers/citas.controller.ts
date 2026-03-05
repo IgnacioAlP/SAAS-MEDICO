@@ -246,13 +246,15 @@ export const createCita = async (req: AuthRequest, res: Response): Promise<void>
       const clinica   = clinicas[0];
 
       if (paciente?.email) {
+        // Combinar fecha + horaInicio para que el email muestre el horario correcto
+        const fechaHoraEmail = fecha && horaInicio ? `${fecha}T${horaInicio}` : fecha_hora?.toString() || fecha;
         sendEmailNuevaCita({
           pacienteNombre: `${paciente.nombres} ${paciente.apellidos}`,
           pacienteEmail:  paciente.email,
           medicoNombre:   `${medico?.nombres || ''} ${medico?.apellidos || ''}`.trim(),
           clinicaNombre:  clinica?.nombre || 'Clínica',
           clinicaId:      clinicaId as number,
-          fecha:          fecha,
+          fecha:          fechaHoraEmail,
           motivo:         motivo,
           citaId,
         }).catch(err => console.error('Error al enviar email cita:', err));
@@ -409,12 +411,13 @@ export const confirmarCitaPorToken = async (req: Request, res: Response): Promis
 
     // Enviar email de confirmación al paciente
     if (cita.paciente_email) {
+      const fechaHoraConf = cita.hora_inicio ? `${cita.fecha}T${cita.hora_inicio}` : cita.fecha;
       sendEmailCitaConfirmada({
         pacienteNombre: `${cita.paciente_nombres} ${cita.paciente_apellidos}`,
         pacienteEmail:  cita.paciente_email,
         medicoNombre:   `${cita.medico_nombres} ${cita.medico_apellidos}`,
         clinicaNombre:  cita.clinica_nombre || 'Clínica',
-        fecha:          cita.fecha,
+        fecha:          fechaHoraConf,
         citaId:         payload.citaId,
       }).catch(err => console.error('Error email confirmación:', err));
     }
