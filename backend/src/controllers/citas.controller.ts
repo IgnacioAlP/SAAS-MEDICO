@@ -129,8 +129,22 @@ export const createCita = async (req: AuthRequest, res: Response): Promise<void>
     console.log('📝 Crear cita - Clinica ID:', clinicaId);
     console.log('📝 Datos recibidos:', { paciente_id, medico_id, fecha_hora, motivo });
 
-    // La columna en la BD se llama 'fecha', no 'fecha_hora'
-    const fecha = fecha_hora;
+    // Extraer fecha y hora del campo fecha_hora (ej: "2026-03-05T14:30" o "2026-03-05 14:30:00")
+    const fechaHoraObj = new Date(fecha_hora);
+    const fecha = fecha_hora ? fecha_hora.toString().substring(0, 10) : null; // "YYYY-MM-DD"
+
+    // hora_inicio en formato HH:MM:SS
+    const horaInicio = fecha_hora
+      ? fechaHoraObj.toTimeString().substring(0, 8)  // "HH:MM:SS"
+      : '08:00:00';
+
+    // hora_fin = hora_inicio + duracion_minutos
+    const durMin = parseInt(duracion_minutos) || 30;
+    const horaFinMs = fechaHoraObj.getTime() + durMin * 60 * 1000;
+    const horaFinObj = new Date(horaFinMs);
+    const horaFin = fecha_hora
+      ? horaFinObj.toTimeString().substring(0, 8)
+      : '08:30:00';
 
     // Validar campos requeridos
     if (!paciente_id || !medico_id || !fecha) {
@@ -161,45 +175,45 @@ export const createCita = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     console.log('✅ Insertando cita en BD...');
-
-    // Intentar con 'programada', si falla el ENUM usar 'pendiente' como fallback
-    let estadoInicial = 'programada';
     let result: any;
     try {
       result = await query(
         `INSERT INTO citas (
-          clinica_id, paciente_id, medico_id, fecha, motivo,
-          tipo_cita, duracion_minutos, observaciones, estado
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          clinica_id, paciente_id, medico_id, fecha, hora_inicio, hora_fin,
+          motivo, tipo_cita, duracion_minutos, observaciones, estado
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'programada')`,
         [
           clinicaId ?? null,
           paciente_id ?? null,
           medico_id ?? null,
           fecha ?? null,
+          horaInicio,
+          horaFin,
           motivo ?? null,
           tipo_cita || 'consulta',
-          duracion_minutos || 30,
+          durMin,
           observaciones ?? null,
-          estadoInicial
         ]
       );
     } catch (insertError: any) {
-      // Si falla por el ENUM, intentar sin especificar estado (usa el DEFAULT de la tabla)
+      // Si falla por el ENUM de estado, reintentar sin especificar estado (usa el DEFAULT)
       if (insertError.message?.includes('Data truncated') || insertError.message?.includes('estado')) {
         result = await query(
           `INSERT INTO citas (
-            clinica_id, paciente_id, medico_id, fecha, motivo,
-            tipo_cita, duracion_minutos, observaciones
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            clinica_id, paciente_id, medico_id, fecha, hora_inicio, hora_fin,
+            motivo, tipo_cita, duracion_minutos, observaciones
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             clinicaId ?? null,
             paciente_id ?? null,
             medico_id ?? null,
             fecha ?? null,
+            horaInicio,
+            horaFin,
             motivo ?? null,
             tipo_cita || 'consulta',
-            duracion_minutos || 30,
-            observaciones ?? null
+            durMin,
+            observaciones ?? null,
           ]
         );
       } else {
