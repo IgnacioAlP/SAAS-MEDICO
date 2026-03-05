@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { query } from '../config/database';
 import { AuthRequest } from '../middleware/auth.middleware';
 import bcrypt from 'bcryptjs';
+import { sendEmail } from '../services/email.service';
 
 // -------------------------------------------------------------------
 // Helpers
@@ -139,93 +140,26 @@ export const testSmtpConfig = async (req: AuthRequest, res: Response): Promise<v
 
     const clinicas = await query('SELECT nombre FROM clinicas WHERE id = ?', [clinicaId]) as any[];
     const clinicaNombre = clinicas[0]?.nombre || 'Clínica';
+    const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER || 'onboarding@resend.dev';
 
-    const htmlBody = `
-      <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:32px;background:#f0f9ff;border-radius:12px;">
-        <h2 style="color:#0e7490;">✅ Configuración de email correcta</h2>
-        <p>Este es un correo de prueba enviado desde <strong>${clinicaNombre}</strong>.</p>
-        <p>El sistema de notificaciones por email funciona correctamente.</p>
-        <hr style="border:none;border-top:1px solid #bae6fd;margin:24px 0;"/>
-        <p style="font-size:12px;color:#6b7280;">Sistema SaaS Médico NexusCreative</p>
-      </div>`;
-
-    // ── Opción A: Resend (recomendado en Railway — usa HTTPS, no SMTP) ──
-    if (process.env.RESEND_API_KEY) {
-      const { Resend } = require('resend');
-      const resend = new Resend(process.env.RESEND_API_KEY);
-
-      const fromAddress = process.env.SMTP_FROM || 'onboarding@resend.dev';
-
-      const { error: resendError } = await resend.emails.send({
-        from: fromAddress,
-        to: email_destino,
-        subject: `✅ Prueba de email – ${clinicaNombre}`,
-        html: htmlBody,
-      });
-
-      if (resendError) {
-        res.status(500).json({ success: false, error: 'Error Resend: ' + resendError.message });
-        return;
-      }
-
-      res.json({ success: true, message: `Email de prueba enviado a ${email_destino} (vía Resend)` });
-      return;
-    }
-
-    // ── Opción B: SMTP clásico (fallback) ──
-    await ensureTable();
-    const rows = await query('SELECT * FROM configuracion_smtp WHERE clinica_id = ?', [clinicaId]) as any[];
-
-    let smtpHost: string, smtpPort: number, smtpUser: string, smtpPassword: string, smtpFrom: string, smtpSecure: boolean;
-
-    const dbCfg = rows[0];
-    if (dbCfg && dbCfg.smtp_user && dbCfg.smtp_password) {
-      smtpHost = dbCfg.smtp_host || 'smtp.gmail.com';
-      smtpPort = dbCfg.smtp_port || 465;
-      smtpUser = dbCfg.smtp_user;
-      smtpPassword = dbCfg.smtp_password;
-      smtpFrom = dbCfg.smtp_from || dbCfg.smtp_user;
-      smtpSecure = !!dbCfg.smtp_secure;
-    } else if (process.env.SMTP_USER && process.env.SMTP_PASSWORD) {
-      smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-      smtpPort = parseInt(process.env.SMTP_PORT || '465');
-      smtpUser = process.env.SMTP_USER;
-      smtpPassword = process.env.SMTP_PASSWORD;
-      smtpFrom = process.env.SMTP_FROM || process.env.SMTP_USER;
-      smtpSecure = process.env.SMTP_SECURE === 'true';
-    } else {
-      res.status(400).json({
-        success: false,
-        error: 'Configure RESEND_API_KEY en las variables de entorno de Railway para enviar emails. Railway bloquea el acceso SMTP directo.'
-      });
-      return;
-    }
-
-    const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpSecure,
-      auth: { user: smtpUser, pass: smtpPassword.replace(/\s/g, '') },
-      tls: { rejectUnauthorized: false },
+    await sendEmail({
+      to:        email_destino,
+      fromName:  clinicaNombre,
+      fromEmail,
+      subject:   `✅ Prueba de email – ${clinicaNombre}`,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:32px;background:#f0f9ff;border-radius:12px;">
+          <h2 style="color:#0e7490;">✅ Configuración de email correcta</h2>
+          <p>Este es un correo de prueba enviado desde <strong>${clinicaNombre}</strong>.</p>
+          <p>El sistema de notificaciones por email funciona correctamente.</p>
+          <hr style="border:none;border-top:1px solid #bae6fd;margin:24px 0;"/>
+          <p style="font-size:12px;color:#6b7280;">Sistema SaaS Médico NexusCreative</p>
+        </div>`,
     });
 
-    try {
-      await transporter.verify();
-    } catch (verifyError: any) {
-      res.status(500).json({
-        success: false,
-        error: `No se pudo conectar al servidor SMTP: ${verifyError.message}`,
-        detail: verifyError.code || ''
-      });
-      return;
-    }
-
-    await transporter.sendMail({ from: smtpFrom, to: email_destino, subject: `✅ Prueba de email – ${clinicaNombre}`, html: htmlBody });
     res.json({ success: true, message: `Email de prueba enviado a ${email_destino}` });
-
   } catch (error: any) {
-    res.status(500).json({ success: false, error: 'Error al enviar email de prueba: ' + error.message, detail: error.code || '' });
+    res.status(500).json({ success: false, error: 'Error al enviar email de prueba: ' + error.message });
   }
 };
 
